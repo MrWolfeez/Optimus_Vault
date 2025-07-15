@@ -417,6 +417,258 @@ function simple_gpg_test() {
 }
 
 # ==============================================
+# IMPORT/EXPORT GPG (Part IV du partiel)
+# ==============================================
+
+function import_gpg_from_vault() {
+    echo "[*] Import des clés GPG du coffre vers le trousseau système..."
+    log "Import GPG coffre -> système"
+    
+    if ! mountpoint -q "$OPTIMUS_MOUNT"; then
+        echo "[-] Environnement non monté."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    local GPG_DIR="$OPTIMUS_MOUNT/.gnupg"
+    
+    if [ ! -d "$GPG_DIR" ]; then
+        echo "[-] Aucune configuration GPG trouvée dans le coffre."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    echo "=== CLÉS DISPONIBLES DANS LE COFFRE ==="
+    export GNUPGHOME="$GPG_DIR"
+    
+    if ! gpg --list-keys 2>/dev/null | grep -q "pub"; then
+        echo "Aucune clé trouvée dans le coffre."
+        unset GNUPGHOME
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    gpg --list-keys --with-colons | grep "^pub" | cut -d: -f10
+    echo ""
+    
+    read -p "Importer toutes les clés dans le trousseau système ? (y/N) : " CONFIRM
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo -n "[~] Import en cours..."
+        
+        local temp_export=$(mktemp)
+        gpg --armor --export > "$temp_export" 2>/dev/null
+        gpg --armor --export-secret-keys >> "$temp_export" 2>/dev/null
+        
+        unset GNUPGHOME
+        
+        if gpg --import "$temp_export" 2>/dev/null; then
+            echo " OK"
+            log "Clés importées dans le trousseau système"
+            echo "[+] Clés importées dans le trousseau système"
+        else
+            echo " Échec"
+            log "Échec import clés système"
+        fi
+        
+        rm -f "$temp_export"
+    fi
+    
+    unset GNUPGHOME
+    echo ""
+    read -p "Appuyez sur Entrée pour continuer..."
+}
+
+function export_gpg_to_vault() {
+    echo "[*] Export des clés GPG du trousseau système vers le coffre..."
+    log "Export GPG système -> coffre"
+    
+    if ! mountpoint -q "$OPTIMUS_MOUNT"; then
+        echo "[-] Environnement non monté."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    echo "=== CLÉS SYSTÈME DISPONIBLES ==="
+    if ! gpg --list-secret-keys 2>/dev/null | grep -q "sec"; then
+        echo "Aucune clé secrète trouvée dans le trousseau système."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    gpg --list-secret-keys --with-colons | grep "^sec" | cut -d: -f10
+    echo ""
+    
+    read -p "Email de la clé à exporter (ou 'all' pour toutes) : " KEY_EMAIL
+    
+    local GPG_EXPORT_DIR="$OPTIMUS_MOUNT/gpg_exports"
+    mkdir -p "$GPG_EXPORT_DIR"
+    
+    echo -n "[~] Export vers le coffre..."
+    
+    if [[ "$KEY_EMAIL" == "all" ]]; then
+        gpg --armor --export > "$GPG_EXPORT_DIR/system_public_keys.asc" 2>/dev/null
+        gpg --armor --export-secret-keys > "$GPG_EXPORT_DIR/system_private_keys.asc" 2>/dev/null
+        chmod 600 "$GPG_EXPORT_DIR/system_private_keys.asc"
+        echo " OK"
+        echo "[+] Toutes les clés exportées vers le coffre"
+    else
+        if ! gpg --list-secret-keys "$KEY_EMAIL" &>/dev/null; then
+            echo " Échec - Clé non trouvée"
+            read -p "Appuyez sur Entrée pour continuer..."
+            return 1
+        fi
+        
+        gpg --armor --export "$KEY_EMAIL" > "$GPG_EXPORT_DIR/pub_${KEY_EMAIL}.asc" 2>/dev/null
+        gpg --armor --export-secret-keys "$KEY_EMAIL" > "$GPG_EXPORT_DIR/sec_${KEY_EMAIL}.asc" 2>/dev/null
+        chmod 600 "$GPG_EXPORT_DIR/sec_${KEY_EMAIL}.asc"
+        echo " OK"
+        echo "[+] Clé $KEY_EMAIL exportée vers le coffre"
+    fi
+    
+    log "Export GPG terminé"
+    echo ""
+    read -p "Appuyez sur Entrée pour continuer..."
+}
+
+# ==============================================
+# CONFIGURATION SSH (Part III du partiel)
+# ==============================================
+
+function init_ssh_basic() {
+    echo "[*] Configuration SSH basique..."
+    log "Configuration SSH basique"
+    
+    if ! mountpoint -q "$OPTIMUS_MOUNT"; then
+        echo "[-] Environnement non monté."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    local SSH_DIR="$OPTIMUS_MOUNT/.ssh"
+    mkdir -p "$SSH_DIR"
+    chmod 700 "$SSH_DIR"
+    
+    local SSH_CONFIG="$SSH_DIR/config"
+    cat > "$SSH_CONFIG" << 'EOF'
+# OPTIMUS VAULT - Configuration SSH Template
+Host *
+    AddKeysToAgent yes
+    IdentitiesOnly yes
+    ServerAliveInterval 60
+
+# Exemple configuration
+#Host monserveur
+#    HostName server.example.com
+#    User myuser
+#    IdentityFile ~/.ssh/id_rsa_server
+EOF
+    chmod 600 "$SSH_CONFIG"
+    
+    echo "[~] Création alias evsh..."
+    echo "alias evsh='ssh -F $SSH_CONFIG'" >> ~/.bashrc 2>/dev/null || true
+    
+    echo "[+] Configuration SSH basique terminée !"
+    echo "    Config SSH : $SSH_CONFIG"
+    echo "    Alias evsh ajouté à ~/.bashrc"
+    echo ""
+    read -p "Appuyez sur Entrée pour continuer..."
+}
+
+function import_ssh_config() {
+    echo "[*] Import configuration SSH existante..."
+    log "Import SSH config"
+    
+    if ! mountpoint -q "$OPTIMUS_MOUNT"; then
+        echo "[-] Environnement non monté."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    local USER_SSH_CONFIG="$HOME/.ssh/config"
+    local VAULT_SSH_DIR="$OPTIMUS_MOUNT/.ssh"
+    
+    if [ ! -f "$USER_SSH_CONFIG" ]; then
+        echo "[-] Aucun fichier ~/.ssh/config trouvé."
+        read -p "Appuyez sur Entrée pour continuer..."
+        return 1
+    fi
+    
+    echo "=== HOSTS DÉTECTÉS ==="
+    grep "^Host " "$USER_SSH_CONFIG" | grep -v "\*" | cut -d' ' -f2- | nl -w2 -s') '
+    echo ""
+    
+    read -p "Numéro du host à importer (ou 'all' pour tous) : " HOST_CHOICE
+    
+    mkdir -p "$VAULT_SSH_DIR"
+    chmod 700 "$VAULT_SSH_DIR"
+    
+    if [[ "$HOST_CHOICE" == "all" ]]; then
+        echo -n "[~] Import de toute la configuration..."
+        cp "$USER_SSH_CONFIG" "$VAULT_SSH_DIR/config" 2>/dev/null
+        chmod 600 "$VAULT_SSH_DIR/config"
+        echo " OK"
+        echo "[+] Configuration complète importée"
+    else
+        local HOST_NAME=$(grep "^Host " "$USER_SSH_CONFIG" | grep -v "\*" | sed -n "${HOST_CHOICE}p" | cut -d' ' -f2-)
+        if [ -n "$HOST_NAME" ]; then
+            echo -n "[~] Import de $HOST_NAME..."
+            awk "/^Host $HOST_NAME/,/^Host / { if(/^Host / && \$2 != \"$HOST_NAME\") exit; print }" "$USER_SSH_CONFIG" >> "$VAULT_SSH_DIR/config"
+            chmod 600 "$VAULT_SSH_DIR/config"
+            echo " OK"
+            echo "[+] Host $HOST_NAME importé"
+        else
+            echo "[-] Host non trouvé"
+        fi
+    fi
+    
+    log "Import SSH config terminé"
+    echo ""
+    read -p "Appuyez sur Entrée pour continuer..."
+}
+
+# ==============================================
+# MENUS ÉTENDUS
+# ==============================================
+
+function gpg_menu_extended() {
+    clear
+    echo "======== GESTION GPG ÉTENDUE ========"
+    echo "1) Configuration automatisée (nouvelle clé)"
+    echo "2) Test structure GPG"
+    echo "3) Import clés (coffre -> système)"
+    echo "4) Export clés (système -> coffre)"
+    echo "5) Retour au menu principal"
+    echo "===================================="
+    read -p "Choix : " GPG_CHOICE
+    
+    case "$GPG_CHOICE" in
+        1) auto_gpg_setup ;;
+        2) simple_gpg_test ;;
+        3) import_gpg_from_vault ;;
+        4) export_gpg_to_vault ;;
+        5) return ;;
+        *) echo "Choix invalide." ; sleep 1 ;;
+    esac
+}
+
+function ssh_menu_basic() {
+    clear
+    echo "======== CONFIGURATION SSH ========"
+    echo "1) Configuration SSH basique + alias evsh"
+    echo "2) Import config SSH existant par host"
+    echo "3) Retour au menu principal"
+    echo "==================================="
+    read -p "Choix : " SSH_CHOICE
+    
+    case "$SSH_CHOICE" in
+        1) init_ssh_basic ;;
+        2) import_ssh_config ;;
+        3) return ;;
+        *) echo "Choix invalide." ; sleep 1 ;;
+    esac
+}
+
+# ==============================================
 # MENU PRINCIPAL
 # ==============================================
 
@@ -434,7 +686,8 @@ function menu() {
     echo "2) Ouvrir l'environnement"
     echo "3) Fermer l'environnement"
     echo "4) Gestion GPG"
-    echo "5) Quitter"
+    echo "5) Configuration SSH"
+    echo "6) Quitter"
     echo "========================================"
     read -p "Choix : " CHOICE
 
@@ -442,8 +695,9 @@ function menu() {
         1) install_env ;;
         2) open_env ;;
         3) close_env ;;
-        4) gpg_menu ;;
-        5) echo "Bye." ; log "Script quitté" ; exit 0 ;;
+        4) gpg_menu_extended ;;
+        5) ssh_menu_basic ;;
+        6) echo "Bye." ; log "Script quitté" ; exit 0 ;;
         *) echo "Choix invalide." ;;
     esac
 }
