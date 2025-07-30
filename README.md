@@ -1,7 +1,6 @@
 <p align="center">
-  <img src="assets/optimus.png" alt="Optimus_Vault logo" width="250"/>
+  <img src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnJ1cHNxd2I5cWU2dXU1Ym0zMjM4cWE2bHk0bm9kZDN0Znc5MXlpNiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/LdEfiIHNJpamOwhQFJ/giphy.gif" alt="Funny GIF">
 </p>
-
 # 🔐 OPTIMUS VAULT
 
 **Environnement sécurisé chiffré avec gestion GPG et SSH intégrée**
